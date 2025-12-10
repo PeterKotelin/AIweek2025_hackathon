@@ -3,7 +3,6 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from PIL import Image
-import clipboard
 
 
 class HeapMapVisualization:

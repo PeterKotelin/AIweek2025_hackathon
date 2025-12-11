@@ -51,7 +51,11 @@ def main():
     # print(get_defect_count(cursor=cursor))
     # print(get_person_data(cursor=cursor))
 
-    get_data_for_heatmap(cursor=cursor)
+    # get_data_for_heatmap(cursor=cursor)
+    print(get_data_for_time_stat(cursor=cursor,
+                                      start_date="2024-12-11",
+                                      end_date="2025-12-11",
+                                      class_type="crazing"))
 
     # Saves the DB and exits
     conn.commit()
@@ -61,12 +65,19 @@ def main():
 def connect_to_bd():
         try:
             global conn
+            # conn = psycopg2.connect(
+            #     dbname="postgres",
+            #     user="postgres",
+            #     password="asdf",
+            #     host="localhost",
+            #     port=5432
+            # )
             conn = psycopg2.connect(
-                dbname="postgres",
-                user="postgres",
-                password="asdf",
-                host="localhost",
-                port=5432
+                host="vm212826.vds.miran.ru",   # например "203.0.113.10"
+                port=5432,
+                database="mydb",
+                user="myuser",
+                password="mypassword"
             )
             print("Connected to PostgreSQL successfully!")
         except psycopg2.Error as e:

@@ -2,6 +2,7 @@ import csv,os,json,ast,random
 from log import *
 from datetime import datetime,timedelta
 import log
+from tqdm import tqdm
 
 
 def main():
@@ -27,11 +28,12 @@ def main():
                             ("time","TIME",False),
                             ("person","VARCHAR(50)",False),
                             ],cursor = cursor)
+    print("Images created")
     create_Boxes(cursor = cursor)
 
-
+    print("tqdm should start any second")
     # Transfer
-    for scan_i,data in enumerate(zip(scan_info,box_info),start=1):
+    for scan_i,data in tqdm(enumerate(zip(scan_info,box_info),start=1),colour="red"):
         scan,boxes = data
         date = random_date()
         time = random_time()

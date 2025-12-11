@@ -1,47 +1,76 @@
 import base64
+import random
+from dataclasses import dataclass, asdict
+from datetime import date, timedelta
 from pathlib import Path
-from fastapi import FastAPI, UploadFile, File
-from starlette.responses import JSONResponse
+from typing import Optional, Literal, List, Dict, Any
 
-app = FastAPI()
+from fastapi import FastAPI, UploadFile, File, Query
+from fastapi.responses import JSONResponse
+from starlette.responses import FileResponse
+
+# Константы
+ROOT = Path('.')
+FALLBACK_IMAGE = ROOT / 'maxresdefault_classify.jpg'
+GRAPHS_DIR = ROOT / 'static' / 'graphs'
+
+app = FastAPI(title='Metrics & Classification API')
 
 
-@app.get("/")
-def read_root():
-    return {"It": "works"}
+# --- Утилиты ---------------------------------------------------------------
+
+def read_image_bytes(path: Path) -> Optional[bytes]:
+    """Безопасно возвращает байты по пути, либо None, если файла нет."""
+    try:
+        return path.read_bytes()
+    except FileNotFoundError:
+        return None
 
 
-def classify_image_sync(file: UploadFile):
-    # Читаем картинку из корня проекта
-    image_path = Path("maxresdefault_classify.jpg")
-    if not image_path.exists():
-        return None, ["файл 'maxresdefault_classify.jpg' не найден"]
+# --- Классификация (симуляция) -------------------------------------------
+
+def classify_image_sync(file: Optional[UploadFile] = None) -> tuple[Optional[bytes], List[str]]:
+    """
+    Симулирует работу функции классификации.
+    Игнорирует переданный файл и возвращает байты из файла
+    `maxresdefault_classify.jpg` в корне проекта и массив текстов.
 
     image_bytes = image_path.read_bytes()
     texts = ["классификация выполнена", "пример результата"]
     return image_bytes, texts
 
 
-@app.post("/api/classify")
-async def classify_image(file: UploadFile = File(...)):
+# --- Endpoints ------------------------------------------------------------
+
+@app.get('/')
+def read_root() -> dict:
+    """Простой health-check endpoint."""
+    return {"It": "works"}
+
+
+@app.post('/api/classify')
+async def classify_image(file: UploadFile = File(...)) -> JSONResponse:
     """
-    Просто возвращает файл в base64 без анализа
+    Принимает загруженную картинку (не обрабатывает её).
+    Вызывает `classify_image_sync`, получает image bytes и список текстов.
+    Возвращает JSON с base64-картинкой и текстовым массивом.
     """
-    contents = await file.read()
+    # читаем (и игнорируем) содержимое загруженного файла, чтобы освободить поток
+    await file.read()
 
     image_bytes, texts = classify_image_sync(file)
-
     if image_bytes is None:
-        return JSONResponse(content={
+        return JSONResponse({
             "success": False,
-            "message": "Файл из корня проекта не найден",
+            "message": f"Файл {FALLBACK_IMAGE.name} не найден",
             "texts": texts
         }, status_code=404)
 
-    return JSONResponse(content={
+    return JSONResponse({
         "success": True,
         "texts": texts,
-        "image_data": base64.b64encode(image_bytes).decode("utf-8"),
-        "image_filename": "maxresdefault_classify.jpg",
-        "image_content_type": "image/jpeg"
+        # Отдаём изображение как base64 в JSON (клиент может декодировать)
+        "image_data": base64.b64encode(image_bytes).decode('ascii'),
+        "image_filename": FALLBACK_IMAGE.name,
+        "image_content_type": "image/jpeg",
     })

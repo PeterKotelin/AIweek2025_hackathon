@@ -1,3 +1,4 @@
+import io
 import base64
 import random
 from dataclasses import dataclass, asdict
@@ -7,7 +8,10 @@ from typing import Optional, Literal, List, Dict, Any
 
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import JSONResponse
-from starlette.responses import FileResponse
+from starlette.responses import StreamingResponse
+
+from Frants import log
+from features.heat_map.heat_map import HeatMapVisualization
 
 # Константы
 ROOT = Path('.')
@@ -15,6 +19,8 @@ FALLBACK_IMAGE = ROOT / 'maxresdefault_classify.jpg'
 GRAPHS_DIR = ROOT / 'static' / 'graphs'
 
 app = FastAPI(title='Metrics & Classification API')
+
+cursor = log.connect_to_bd()
 
 
 # --- Утилиты ---------------------------------------------------------------
@@ -135,13 +141,18 @@ def generate_counts(days: int, cls: Optional[str]) -> List[MetricsItem]:
 
 
 @app.get('/api/metrics')
-def get_metrics(class_: Optional[DamageClass] = Query(None, alias='class')) -> List[Dict[str, int]]:
+def get_metrics(class_: Optional[DamageClass] = Query(None, alias='class'), 
+                start_date_: Optional[str] = Query(None, alias='start_date'),
+                end_date_: Optional[str] = Query(None, alias='end_date')) -> List[Dict[str, str]]:
     """
     Возвращает список словарей с полями date и count за последние 30 дней.
     Параметр `class` — необязательный query-параметр для фильтрации (alias работает как 'class').
     """
-    metrics = generate_counts(days=30, cls=class_)
-    return [asdict(m) for m in metrics]
+    data = log.get_data_for_time_stat(cursor=cursor,
+                                      start_date=start_date_,
+                                      end_date=end_date_,
+                                      class_type=class_)
+    return data
 
 
 BASE_CATEGORIES = [
@@ -186,12 +197,12 @@ def build_random_payload(seed: Optional[int] = None) -> dict:
 
 
 @app.get('/api/metrics/categories')
-def get_categories(mode: str = 'fixed', seed: Optional[int] = None) -> JSONResponse:
+def get_categories() -> JSONResponse:
     """
     Возвращает набор метрик по категориям.
     mode=random -> случайные значения (seed опционален), иначе фиксированные значения.
     """
-    data = build_random_payload(seed) if mode == 'random' else build_fixed_payload()
+    data = log.get_defect_count(cursor=cursor)
     return JSONResponse(content=data)
 
 
@@ -220,27 +231,23 @@ def build_random_workers(size: int = 8) -> List[Dict[str, Any]]:
 
 
 @app.get('/api/metrics/workers')
-def get_workers(size: int = Query(8, ge=1, le=200)) -> List[Dict[str, Any]]:
+def get_workers() -> List[Dict[str, Any]]:
     """Возвращает массив работников. Параметр size контролирует количество объектов."""
-    return build_random_workers(size=size)
+    data = log.get_person_data(cursor=cursor)
+    return data
 
 
 @app.get('/api/metrics/graph')
-def get_graph(class_: Optional[str] = Query(None, alias='class')):
+def get_graph(class_: Optional[DamageClass] = Query(None, alias='class')):
     """
     Возвращает файл графика для указанного класса из `static/graphs`.
     Если файл не найден, отдаёт fallback-изображение из корня проекта.
     """
-    filename = f"{class_ or 'all'}.png"
-    file_path = GRAPHS_DIR / filename
+    heatmap_diagram = HeatMapVisualization()
+    data = log.get_data_for_heatmap(class_,cursor=cursor)
+    buf = heatmap_diagram.visualize_heatmap(data)
 
-    # fallback на корневой файл проекта
-    if not file_path.exists():
-        file_path = FALLBACK_IMAGE
-        if not file_path.exists():
-            return JSONResponse(content={"error": "graph not found and fallback image missing"}, status_code=404)
 
-    suffix = file_path.suffix.lower()
-    media_type = 'image/png' if suffix == '.png' else 'image/jpeg' if suffix in ('.jpg',
-                                                                                 '.jpeg') else 'application/octet-stream'
-    return FileResponse(file_path, media_type=media_type)
+    return StreamingResponse(buf, media_type="image/png")
+
+

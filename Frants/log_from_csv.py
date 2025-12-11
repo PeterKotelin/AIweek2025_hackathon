@@ -20,7 +20,13 @@ def main():
     global cursor
     cursor = connect_to_bd()
     print("Connected to BD")
-    create_Images("Images",[("scan_id","SERIAL",True),("area","FLOAT4",False),("flawed","INT",False),("date","DATE",False),("time","TIME",False)],cursor = cursor)
+    create_Images("Images",[("scan_id","SERIAL",True),
+                            ("area","FLOAT4",False),
+                            ("flawed","INT",False),
+                            ("date","DATE",False),
+                            ("time","TIME",False),
+                            ("person","VARCHAR(50)",False),
+                            ],cursor = cursor)
     create_Boxes(cursor = cursor)
 
 
@@ -29,7 +35,8 @@ def main():
         scan,boxes = data
         date = random_date()
         time = random_time()
-        save_scan(scan["defected_area"],scan["is_trash"],date,time,cursor = cursor)
+        person = randoom_person()
+        save_scan(scan["defected_area"],scan["is_trash"],date,time,person,cursor = cursor)
         for box in boxes["defects"]:
             save_box(scan_i,box[0],box[1][0],box[1][1],box[1][2],box[1][3],cursor = cursor)
 
@@ -58,6 +65,18 @@ def random_date():
 
 def random_time():
     return (datetime.now() + timedelta(seconds=random.randint(0,86_400))).time()
+
+def randoom_person():
+    people = [
+        "Оператор 1",
+        "Оператор 2",
+        "Оператор 3",
+        "Оператор 4",
+        "Оператор 5",
+        "Оператор 6",
+        "Оператор 7",
+        ]
+    return random.choice(people)
 
 if __name__=="__main__":
     main()

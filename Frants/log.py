@@ -1,6 +1,7 @@
 import psycopg2
 import sys,json
 from datetime import datetime
+import pandas as pd
 
 def main():
     # Connection to DB
@@ -46,9 +47,11 @@ def main():
 
     # print(get_data_for_heatmap("asdf",cursor = cursor))
 
-    print(get_data_for_time_stat())
-    print(get_defect_count())
-    print(get_person_data())
+    # print(get_data_for_time_stat(cursor=cursor,class_type="pitted_surface"))
+    # print(get_defect_count(cursor=cursor))
+    # print(get_person_data(cursor=cursor))
+
+    get_data_for_heatmap(cursor=cursor)
 
     # Saves the DB and exits
     conn.commit()
@@ -146,27 +149,32 @@ def get_data_for_heatmap(class_type:str|None = None,**kwargs):
     else:
         get_table("Boxes",cursor = kwargs["cursor"])
 
-    boxes = cursor.fetchall()
+    boxes = kwargs["cursor"].fetchall()
 
-    return boxes
-    
+    df = pd.DataFrame(boxes)
+    print(df)
 
-def get_data_for_time_stat(start_date:str|None = None,end_date:str|None = None, class_type:str|None = None):
+    result_df = df[[2,3,4,5]]
+    data = [result_df.iloc[i].to_list() for i in range(len(result_df))]
+
+    return data
+
+def get_data_for_time_stat(cursor,start_date:str|None = None,end_date:str|None = None, class_type:str|None = None):
     """Result:
 [
   { "date": "2025-12-01", "count": 12 },
   { "date": "2025-12-02", "count": 8 },
   { "date": "2025-12-03", "count": 15 }
 ]"""
-    sql_data_for_time_stat(start_date="2025-11-23",end_date="2025-12-11",class_type="inclusion",cursor = cursor)
+    sql_data_for_time_stat(start_date=start_date,end_date=end_date,class_type=class_type,cursor = cursor)
     data = cursor.fetchall()
     result = []
     for line in data:
         result.append({
             "date":str(line[0]),
-            "count":line[1]
+            "count":str(line[1])
         })
-    return json.dumps(result)
+    return result
 
 @execute
 def sql_data_for_time_stat(start_date:str|None = None,end_date:str|None = None, class_type:str|None = None, **kwargs):
@@ -198,7 +206,7 @@ JOIN Images ON Boxes.scan_id = Images.scan_id
 GROUP BY Images.date
 """
 
-def get_defect_count():
+def get_defect_count(cursor):
     """{
   "crazing": 11,
   "crazing_defect": 2,
@@ -229,7 +237,6 @@ def get_defect_count():
 
     return data_good
     
-
 @execute
 def sql_defect_count(failiure:bool|None = None, **kwargs):
     if failiure:
@@ -244,7 +251,7 @@ SELECT class_type,count(*) FROM Boxes
 GROUP BY class_type
 """
 
-def get_person_data(): 
+def get_person_data(cursor): 
     """[
     { "name": "Иванов И.И.", "count": 120 },
     { "name": "Петров П.П.", "count": 95 },
@@ -259,7 +266,6 @@ def get_person_data():
             "count": line[1],
         })
     return result
-
 
 @execute
 def sql_person_data(**kwargs):

@@ -1,6 +1,5 @@
 import io
 import numpy as np
-import pandas as pd
 import matplotlib.pyplot as plt
 from PIL import Image
 
@@ -20,7 +19,7 @@ class HeapMapVisualization:
 
         fig, ax = plt.subplots(figsize=(4, 4), dpi=100)
         im = ax.imshow(self.__global_heatmap, cmap='viridis')
-        cbar = fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
+        fig.colorbar(im, ax=ax, fraction=0.046, pad=0.04)
 
         fig.tight_layout(pad=0.2)
 

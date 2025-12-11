@@ -104,3 +104,4 @@ if __name__ == "__main__":
 
     report = ReportGeneration()
     _report = report.generate_defect_report(detected_defects)
+

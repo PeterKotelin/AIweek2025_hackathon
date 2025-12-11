@@ -1,5 +1,6 @@
 import psycopg2
 import sys
+from datetime import datetime
 
 def main():
     # Connection to DB
@@ -9,8 +10,8 @@ def main():
 
     try:
         if sys.argv[1] == "d":
-            delete_db("Boxes")
-            delete_db("Images")
+            delete_db("Boxes",cursor = cursor)
+            delete_db("Images",cursor = cursor)
             conn.commit()
             cursor.close()
             sys.exit()
@@ -18,26 +19,26 @@ def main():
         pass
     
     # Creates tables if needed
-    get_tables()
+    get_tables(cursor = cursor)
     print(cursor.fetchall())
-    create_Images("Images",[("scan_id","SERIAL",True),("area","FLOAT4",False),("flawed","INT",False)])
-    create_Boxes()
+    create_Images("Images",[("scan_id","SERIAL",True),("area","FLOAT4",False),("flawed","INT",False),("date","DATE",False),("time","TIME",False)],cursor = cursor)
+    create_Boxes(cursor = cursor)
 
-    get_table("Boxes")
+    get_table("Boxes",cursor = cursor)
     print(cursor.fetchall())
-    get_table("Images")
-    print(cursor.fetchall())
-
-    save_scan(0.2,1)
-    get_table("Images")
+    get_table("Images",cursor = cursor)
     print(cursor.fetchall())
 
-    save_box(1,"scrach",0,0,150,150)
-    get_table("Boxes")
+    save_scan(0.2,1,datetime.now().date(),datetime.now().time(),cursor = cursor)
+    get_table("Images",cursor = cursor)
+    print(cursor.fetchall())
+
+    save_box(1,"scrach",0,0,150,150,cursor = cursor)
+    get_table("Boxes",cursor = cursor)
     print(cursor.fetchall())
 
 
-    print(get_data_for_heatmap("asdf"))
+    print(get_data_for_heatmap("asdf",cursor = cursor))
     # Saves the DB and exits
     conn.commit()
     cursor.close()
@@ -65,11 +66,11 @@ def execute(func):
     def wrapper(*args,**kwargs):
         query = func(*args,**kwargs)
         print(f"executing:\n{query}")
-        result = cursor.execute(query)
+        result = kwargs["cursor"].execute(query)
     return wrapper
 
 @execute
-def get_table(table_name:str,*args):
+def get_table(table_name:str,*args,**kwargs):
     if not args:
         return f"SELECT * FROM {table_name}"
     
@@ -80,7 +81,7 @@ def get_table(table_name:str,*args):
     return query.strip(" AND")
 
 @execute
-def create_Images(name:str,args:list[tuple[str]]):
+def create_Images(name:str,args:list[tuple[str]],**kwargs):
     query =  f"""CREATE TABLE IF NOT EXISTS {name} ("""
     for item in args:
         if item[2]:
@@ -91,7 +92,7 @@ def create_Images(name:str,args:list[tuple[str]]):
     return query.strip(",") + ")"
 
 @execute
-def create_Boxes():
+def create_Boxes(**kwargs):
     return """CREATE TABLE IF NOT EXISTS Boxes (
         box_id SERIAL PRIMARY KEY,
         class_type VARCHAR(50) NOT NULL,
@@ -109,30 +110,30 @@ def create_Boxes():
 
 
 @execute
-def clear_db(table_name:str):
+def clear_db(table_name:str,**kwargs):
     return f"""DELETE FROM {table_name}"""
 
 @execute
-def delete_db(table_name:str):
+def delete_db(table_name:str,**kwargs):
     return f"""DROP TABLE IF EXISTS {table_name}"""
 
 @execute
-def get_tables():
+def get_tables(**kwargs):
     return """SELECT * FROM INFORMATION_SCHEMA.TABLES WHERE table_schema = 'public' AND table_type = 'BASE TABLE'"""
 
 @execute
-def save_scan(area:float,trash:bool):
-    return f"INSERT INTO Images (area, flawed) VALUES ({area}, {trash});"
+def save_scan(area:float,trash:bool,date,time,**kwargs):
+    return f"INSERT INTO Images (area, flawed, date, time) VALUES ({area}, {trash}, '{date}', '{time}');"
 
 @execute
-def save_box(scan_id:int, class_type:str, x_min:int, y_min:int, x_max:int, y_max:int):
+def save_box(scan_id:int, class_type:str, x_min:int, y_min:int, x_max:int, y_max:int,**kwargs):
     return f"INSERT INTO Boxes (scan_id, class_type, x_min, y_min, x_max, y_max) VALUES ({scan_id}, '{class_type}', {x_min}, {y_min}, {x_max}, {y_max});"
 
-def get_data_for_heatmap(class_type:str|None = None):
+def get_data_for_heatmap(class_type:str|None = None,**kwargs):
     if class_type:
-        get_table("Boxes",("class_type",class_type))
+        get_table("Boxes",("class_type",class_type),cursor = kwargs["cursor"])
     else:
-        get_table("Boxes")
+        get_table("Boxes",cursor = kwargs["cursor"])
 
     boxes = cursor.fetchall()
 

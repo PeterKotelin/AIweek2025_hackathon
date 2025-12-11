@@ -3,7 +3,9 @@ import numpy as np
 import pandas as pd
 import matplotlib.pyplot as plt
 from PIL import Image
+import matplotlib
 
+matplotlib.use('Agg')
 
 class HeatMapVisualization:
     def __init__(self, img_width=200, img_height=200):
@@ -26,8 +28,8 @@ class HeatMapVisualization:
 
         buf = io.BytesIO()
         fig.savefig(buf, format='png')
-        buf.seek(0)
         plt.close(fig)
+        buf.seek(0)
 
         return buf
 

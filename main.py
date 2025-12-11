@@ -1,8 +1,6 @@
-import io
 import base64
 import io
-import random
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date, timedelta
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Literal
@@ -10,34 +8,24 @@ from typing import Optional, List, Dict, Any, Literal
 from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import JSONResponse
+from rich.diagnose import report
 from starlette.responses import StreamingResponse
 
 from Frants import log
 from features.heat_map.heat_map import HeatMapVisualization
-
+from features.reports.report_generation import ReportGeneration
 from model_logic import predict_image, DEVICE, IDX_TO_CLASS, model, draw_boxes_on_image, load_model_logic, MODEL_PATH
 
 # Для работы с БД
-cursor = log.connect_to_bd()
+conn = log.get_connection()
 
 # Константы
 ROOT = Path('.')
-FALLBACK_IMAGE = ROOT / 'maxresdefault_classify.jpg'
 GRAPHS_DIR = ROOT / 'static' / 'graphs'
 
 app = FastAPI(title='Metrics & Classification API')
-# Храним модель здесь, чтобы не использовать модульную глобальную переменную
 model = load_model_logic(MODEL_PATH, DEVICE)
 
-
-# --- Утилиты ---------------------------------------------------------------
-
-def read_image_bytes(path: Path) -> Optional[bytes]:
-    """Безопасно возвращает байты по пути, либо None, если файла нет."""
-    try:
-        return path.read_bytes()
-    except FileNotFoundError:
-        return None
 
 # --- Endpoints ------------------------------------------------------------
 
@@ -78,6 +66,7 @@ async def classify_image(file: UploadFile = File(...)) -> JSONResponse:
 
         # 3. Формирование текстового ответа
         response_texts = []
+        list_defects = []
         for i, (box, label_idx, score) in enumerate(zip(boxes, labels, scores), start=1):
             class_name = IDX_TO_CLASS.get(label_idx, "unknown")
             item = {
@@ -85,8 +74,11 @@ async def classify_image(file: UploadFile = File(...)) -> JSONResponse:
                 "klass": class_name,
                 "confidence": f"{int(float(score) * 100)}%"
             }
+            list_defects.append(class_name)
             response_texts.append(item)
 
+        rg = ReportGeneration()
+        a = rg.generate_defect_report(list_defects)
         # 4. РИСОВАНИЕ БОКСОВ И КОДИРОВАНИЕ КАРТИНКИ ОБРАТНО
         processed_image = draw_boxes_on_image(image, boxes, labels, scores)
         buffered = io.BytesIO()
@@ -96,6 +88,7 @@ async def classify_image(file: UploadFile = File(...)) -> JSONResponse:
         # 5. Ответ
         return JSONResponse(content={
             "texts": response_texts,
+            "report": a,
             "image_data": result_b64,  # Картинка с рамками
             "content_type": "image/jpeg"
         })
@@ -130,7 +123,7 @@ def generate_counts(days: int, cls: Optional[str]) -> List[MetricsItem]:
         "inclusion": 6,
         "patches": 7,
         "pitted_surface": 10,
-        "rolled_in_scale": 5,
+        "n_scale": 5,
         "scratches": 9,
     }
     variance_map = {
@@ -158,59 +151,19 @@ def generate_counts(days: int, cls: Optional[str]) -> List[MetricsItem]:
 
 
 @app.get('/api/metrics')
-def get_metrics(class_: Optional[DamageClass] = Query(None, alias='class'), 
-                start_date_: Optional[str] = Query(None, alias='start_date'),
-                end_date_: Optional[str] = Query(None, alias='end_date')) -> List[Dict[str, str]]:
+def get_metrics(class_: Optional[DamageClass] = Query(None, alias='class'),
+                start_date_: Optional[str] = Query(None, alias='date_start'),
+                end_date_: Optional[str] = Query(None, alias='date_end')) -> JSONResponse:
     """
     Возвращает список словарей с полями date и count за последние 30 дней.
     Параметр `class` — необязательный query-параметр для фильтрации (alias работает как 'class').
     """
-    data = log.get_data_for_time_stat(cursor=cursor,
-                                      start_date=start_date_,
-                                      end_date=end_date_,
-                                      class_type=class_)
-    return data
-
-
-BASE_CATEGORIES = [
-    "crazing",
-    "inclusion",
-    "patches",
-    "pitted_surface",
-    "rolled_in_scale",
-    "scratches",
-]
-
-
-def build_fixed_payload() -> dict:
-    """Фиксированный пример возвращаемых категорий с дефектами."""
-    return {
-        "crazing": 11,
-        "crazing_defect": 2,
-        "inclusion": 3,
-        "inclusion_defect": 1,
-        "patches": 8,
-        "patches_defect": 3,
-        "pitted_surface": 5,
-        "pitted_surface_defect": 2,
-        "rolled_in_scale": 7,
-        "rolled_in_scale_defect": 1,
-        "scratches": 9,
-        "scratches_defect": 4,
-    }
-
-
-def build_random_payload(seed: Optional[int] = None) -> dict:
-    """Генерирует случайные метрики по категориям (опционально с seed для детерминированности)."""
-    if seed is not None:
-        random.seed(seed)
-    payload: Dict[str, int] = {}
-    for cat in BASE_CATEGORIES:
-        base = random.randint(1, 20)
-        defect = max(0, int(base * random.uniform(0.05, 0.5)))
-        payload[cat] = base
-        payload[f"{cat}_defect"] = defect
-    return payload
+    with conn.cursor() as cursor:
+        data = log.get_data_for_time_stat(cursor=cursor,
+                                          start_date=start_date_,
+                                          end_date=end_date_,
+                                          class_type=class_)
+        return JSONResponse(data)
 
 
 @app.get('/api/metrics/categories')
@@ -219,39 +172,16 @@ def get_categories() -> JSONResponse:
     Возвращает набор метрик по категориям.
     mode=random -> случайные значения (seed опционален), иначе фиксированные значения.
     """
-    data = log.get_defect_count(cursor=cursor)
-    return JSONResponse(content=data)
-
-
-SAMPLE_NAMES = [
-    "Иванов И.И.", "Петров П.П.", "Сидоров С.С.", "Кузнецов К.К.",
-    "Смирнова А.А.", "Попов О.О.", "Лебедев Л.Л.", "Козлова К.К.",
-    "Николаев Н.Н.", "Морозова М.М."
-]
-
-
-def build_random_workers(size: int = 8) -> List[Dict[str, Any]]:
-    """Генерирует список работников {name: str, count: int}.
-
-    - name: строка (Ф.И.О.)
-    - count: случайное целое количество
-    """
-    workers: List[Dict[str, Any]] = []
-    for i in range(size):
-        name = SAMPLE_NAMES[i % len(SAMPLE_NAMES)]
-        if i >= len(SAMPLE_NAMES):
-            # при нехватке уникальных имён добавляем индекс
-            name = f"{name} #{i + 1}"
-        count = random.randint(10, 300)
-        workers.append({"name": name, "count": count})
-    return workers
+    with conn.cursor() as cursor:
+        data = log.get_defect_count(cursor=cursor)
+        return JSONResponse(content=data)
 
 
 @app.get('/api/metrics/workers')
 def get_workers() -> List[Dict[str, Any]]:
     """Возвращает массив работников. Параметр size контролирует количество объектов."""
-    data = log.get_person_data(cursor=cursor)
-    return data
+    with conn.cursor() as cursor:
+        return log.get_person_data(cursor=cursor)
 
 
 @app.get('/api/metrics/graph')
@@ -261,10 +191,7 @@ def get_graph(class_: Optional[DamageClass] = Query(None, alias='class')):
     Если файл не найден, отдаёт fallback-изображение из корня проекта.
     """
     heatmap_diagram = HeatMapVisualization()
-    data = log.get_data_for_heatmap(class_,cursor=cursor)
+    with conn.cursor() as cursor:
+        data = log.get_data_for_heatmap(class_, cursor=cursor)
     buf = heatmap_diagram.visualize_heatmap(data)
-
-
     return StreamingResponse(buf, media_type="image/png")
-
-

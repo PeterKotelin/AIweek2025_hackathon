@@ -11,7 +11,7 @@ def main():
 
     new_line = {
         "id": 0,
-        "defect_name": "asdf",
+        "defects": [("asdf",(0,0,100,100)),("asdf",(50,50,150,1500))],
         "defected_area": 0.3,
         "is_trash": True
     }
@@ -24,7 +24,7 @@ def make_log(name:str):
     with open(name,"w",encoding="utf-8",newline="") as file:
         writer = csv.DictWriter(
             file,
-            fieldnames=["id","defect_name","defected_area","is_trash"]
+            fieldnames=["id","defects","defected_area","is_trash"]
             )
         writer.writeheader()
 
@@ -34,7 +34,7 @@ def log_line(path,line:dict):
     with open(path,"a",newline="") as file:
         writer = csv.DictWriter(
             file,
-            fieldnames=["id","defect_name","defected_area","is_trash"]
+            fieldnames=["id","defects","defected_area","is_trash"]
         )
         writer.writerow(line)
 

@@ -1,0 +1,5 @@
+venv*
+archive
+Frants/logs
+features/dark_spots/*.jpg
+*__pycache__

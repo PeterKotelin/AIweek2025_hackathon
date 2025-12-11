@@ -12,7 +12,13 @@ from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import JSONResponse
 from starlette.responses import StreamingResponse
 
+from Frants import log
+from features.heat_map.heat_map import HeatMapVisualization
+
 from model_logic import predict_image, DEVICE, IDX_TO_CLASS, model, draw_boxes_on_image, load_model_logic, MODEL_PATH
+
+# Для работы с БД
+cursor = log.connect_to_bd()
 
 # Константы
 ROOT = Path('.')

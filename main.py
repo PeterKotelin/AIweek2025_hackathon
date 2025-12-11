@@ -1,17 +1,17 @@
-import io
 import base64
+import io
 import random
-from dataclasses import dataclass, asdict
+from dataclasses import asdict, dataclass
 from datetime import date, timedelta
 from pathlib import Path
-from typing import Optional, Literal, List, Dict, Any
+from typing import Optional, List, Dict, Any, Literal
 
+from PIL import Image
 from fastapi import FastAPI, UploadFile, File, Query
 from fastapi.responses import JSONResponse
-from starlette.responses import StreamingResponse
+from starlette.responses import FileResponse
 
-from Frants import log
-from features.heat_map.heat_map import HeatMapVisualization
+from model_logic import predict_image, DEVICE, IDX_TO_CLASS, model, draw_boxes_on_image, load_model_logic, MODEL_PATH
 
 # Константы
 ROOT = Path('.')
@@ -19,8 +19,8 @@ FALLBACK_IMAGE = ROOT / 'maxresdefault_classify.jpg'
 GRAPHS_DIR = ROOT / 'static' / 'graphs'
 
 app = FastAPI(title='Metrics & Classification API')
-
-cursor = log.connect_to_bd()
+# Храним модель здесь, чтобы не использовать модульную глобальную переменную
+model = load_model_logic(MODEL_PATH, DEVICE)
 
 
 # --- Утилиты ---------------------------------------------------------------
@@ -31,25 +31,6 @@ def read_image_bytes(path: Path) -> Optional[bytes]:
         return path.read_bytes()
     except FileNotFoundError:
         return None
-
-
-# --- Классификация (симуляция) -------------------------------------------
-
-def classify_image_sync(file: Optional[UploadFile] = None) -> tuple[Optional[bytes], List[str]]:
-    """
-    Симулирует работу функции классификации.
-    Игнорирует переданный файл и возвращает байты из файла
-    `maxresdefault_classify.jpg` в корне проекта и массив текстов.
-
-    Возвращаемое значение: (image_bytes или None, список строк)
-    """
-    image_bytes = read_image_bytes(FALLBACK_IMAGE)
-    if image_bytes is None:
-        return None, [f"файл '{FALLBACK_IMAGE.name}' не найден"]
-
-    texts = ["классификация выполнена", "пример результата"]
-    return image_bytes, texts
-
 
 # --- Endpoints ------------------------------------------------------------
 
@@ -62,29 +43,58 @@ def read_root() -> dict:
 @app.post('/api/classify')
 async def classify_image(file: UploadFile = File(...)) -> JSONResponse:
     """
-    Принимает загруженную картинку (не обрабатывает её).
-    Вызывает `classify_image_sync`, получает image bytes и список текстов.
-    Возвращает JSON с base64-картинкой и текстовым массивом.
+    Принимает загруженную картинку (multipart/form-data).
+    Открывает её с помощью PIL, выполняет инференс и возвращает:
+    - texts: список {box_id, klass, confidence}
+    - image_data: base64 исходных байтов
+    - image_content_type: content-type изображения
     """
-    # читаем (и игнорируем) содержимое загруженного файла, чтобы освободить поток
-    await file.read()
+    try:
 
-    image_bytes, texts = classify_image_sync(file)
-    if image_bytes is None:
-        return JSONResponse({
-            "success": False,
-            "message": f"Файл {FALLBACK_IMAGE.name} не найден",
-            "texts": texts
-        }, status_code=404)
+        if file is None or not file.filename:
+            return JSONResponse(content={"error": "Файл не передан"}, status_code=400)
 
-    return JSONResponse({
-        "success": True,
-        "texts": texts,
-        # Отдаём изображение как base64 в JSON (клиент может декодировать)
-        "image_data": base64.b64encode(image_bytes).decode('ascii'),
-        "image_filename": FALLBACK_IMAGE.name,
-        "image_content_type": "image/jpeg",
-    })
+        raw_bytes = await file.read()
+
+        b64_string = base64.b64encode(raw_bytes).decode('utf-8')
+
+        try:
+            image_bytes = base64.b64decode(b64_string)
+            image = Image.open(io.BytesIO(image_bytes))
+        except Exception as e:
+            return JSONResponse(content={"error": f"Invalid image data: {str(e)}"}, status_code=400)
+
+        # 2. Предсказание
+        boxes, labels, scores = predict_image(
+            model, image, device=DEVICE, conf_thresh=0.2, nms_thresh=0.1
+        )
+
+        # 3. Формирование текстового ответа
+        response_texts = []
+        for i, (box, label_idx, score) in enumerate(zip(boxes, labels, scores), start=1):
+            class_name = IDX_TO_CLASS.get(label_idx, "unknown")
+            item = {
+                "box_id": str(i),
+                "klass": class_name,
+                "confidence": f"{int(float(score) * 100)}%"
+            }
+            response_texts.append(item)
+
+        # 4. РИСОВАНИЕ БОКСОВ И КОДИРОВАНИЕ КАРТИНКИ ОБРАТНО
+        processed_image = draw_boxes_on_image(image, boxes, labels, scores)
+        buffered = io.BytesIO()
+        processed_image.save(buffered, format="JPEG")
+        result_b64 = base64.b64encode(buffered.getvalue()).decode('utf-8')
+
+        # 5. Ответ
+        return JSONResponse(content={
+            "texts": response_texts,
+            "image_data": result_b64,  # Картинка с рамками
+            "content_type": "image/jpeg"
+        })
+    except Exception as e:
+        print(f"Error processing request: {e}")
+        return JSONResponse(content={"error": "Internal server error"}, status_code=500)
 
 
 DamageClass = Literal[
@@ -141,18 +151,13 @@ def generate_counts(days: int, cls: Optional[str]) -> List[MetricsItem]:
 
 
 @app.get('/api/metrics')
-def get_metrics(class_: Optional[DamageClass] = Query(None, alias='class'), 
-                start_date_: Optional[str] = Query(None, alias='start_date'),
-                end_date_: Optional[str] = Query(None, alias='end_date')) -> List[Dict[str, str]]:
+def get_metrics(class_: Optional[DamageClass] = Query(None, alias='class')) -> List[Dict[str, int]]:
     """
     Возвращает список словарей с полями date и count за последние 30 дней.
     Параметр `class` — необязательный query-параметр для фильтрации (alias работает как 'class').
     """
-    data = log.get_data_for_time_stat(cursor=cursor,
-                                      start_date=start_date_,
-                                      end_date=end_date_,
-                                      class_type=class_)
-    return data
+    metrics = generate_counts(days=30, cls=class_)
+    return [asdict(m) for m in metrics]
 
 
 BASE_CATEGORIES = [
@@ -197,12 +202,12 @@ def build_random_payload(seed: Optional[int] = None) -> dict:
 
 
 @app.get('/api/metrics/categories')
-def get_categories() -> JSONResponse:
+def get_categories(mode: str = 'fixed', seed: Optional[int] = None) -> JSONResponse:
     """
     Возвращает набор метрик по категориям.
     mode=random -> случайные значения (seed опционален), иначе фиксированные значения.
     """
-    data = log.get_defect_count(cursor=cursor)
+    data = build_random_payload(seed) if mode == 'random' else build_fixed_payload()
     return JSONResponse(content=data)
 
 
@@ -231,23 +236,27 @@ def build_random_workers(size: int = 8) -> List[Dict[str, Any]]:
 
 
 @app.get('/api/metrics/workers')
-def get_workers() -> List[Dict[str, Any]]:
+def get_workers(size: int = Query(8, ge=1, le=200)) -> List[Dict[str, Any]]:
     """Возвращает массив работников. Параметр size контролирует количество объектов."""
-    data = log.get_person_data(cursor=cursor)
-    return data
+    return build_random_workers(size=size)
 
 
 @app.get('/api/metrics/graph')
-def get_graph(class_: Optional[DamageClass] = Query(None, alias='class')):
+def get_graph(class_: Optional[str] = Query(None, alias='class')):
     """
     Возвращает файл графика для указанного класса из `static/graphs`.
     Если файл не найден, отдаёт fallback-изображение из корня проекта.
     """
-    heatmap_diagram = HeatMapVisualization()
-    data = log.get_data_for_heatmap(class_,cursor=cursor)
-    buf = heatmap_diagram.visualize_heatmap(data)
+    filename = f"{class_ or 'all'}.png"
+    file_path = GRAPHS_DIR / filename
 
+    # fallback на корневой файл проекта
+    if not file_path.exists():
+        file_path = FALLBACK_IMAGE
+        if not file_path.exists():
+            return JSONResponse(content={"error": "graph not found and fallback image missing"}, status_code=404)
 
-    return StreamingResponse(buf, media_type="image/png")
-
-
+    suffix = file_path.suffix.lower()
+    media_type = 'image/png' if suffix == '.png' else 'image/jpeg' if suffix in ('.jpg',
+                                                                                 '.jpeg') else 'application/octet-stream'
+    return FileResponse(file_path, media_type=media_type)
